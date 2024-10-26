@@ -985,6 +985,7 @@ next:
 		bio_page = fio->compressed_page;
 	else
 		bio_page = fio->page;
+	inode = fio->page->mapping->host;
 
 	/* set submitted = true as a return value */
 	fio->submitted = true;

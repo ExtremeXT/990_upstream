@@ -165,7 +165,7 @@ config SCSI_UFS_FMP_DUMP
 
 config SCSI_UFS_EXYNOS_FMP
 	tristate "EXYNOS Flash Memory Protector for UFS Host"
-	depends on SCSI_UFS_EXYNOS
+	depends on SCSI_UFS_EXYNOS && EXYNOS_FMP && SCSI_UFS_CRYPTO
 	---help---
 	  This selects the EXYNOS UFS FMP Driver.
 

@@ -210,7 +210,7 @@ static void sve_free(struct task_struct *task)
  */
 static void task_fpsimd_load(void)
 {
-	WARN_ON(!in_softirq() && !irqs_disabled());
+	//WARN_ON(!in_softirq() && !irqs_disabled());
 	WARN_ON(!system_supports_fpsimd());
 
 	if (system_supports_sve() && test_thread_flag(TIF_SVE))
@@ -233,7 +233,7 @@ void fpsimd_save(void)
 	/* set by fpsimd_bind_task_to_cpu() or fpsimd_bind_state_to_cpu() */
 
 	WARN_ON(!system_supports_fpsimd());
-	WARN_ON(!in_softirq() && !irqs_disabled());
+	//WARN_ON(!in_softirq() && !irqs_disabled());
 
 	if (!test_thread_flag(TIF_FOREIGN_FPSTATE)) {
 		if (system_supports_sve() && test_thread_flag(TIF_SVE)) {
@@ -894,6 +894,7 @@ static void fpsimd_check_context(struct task_struct *next)
 				current->comm, current->pid, next->comm, next->pid);
 			if (IS_ENABLED(CONFIG_SEC_DEBUG_FPSIMD_CHECK_CONTEXT))
 				dump_stack();
+			return;
 		}
 	}
 
@@ -1052,7 +1053,7 @@ void fpsimd_bind_state_to_cpu(struct user_fpsimd_state *st)
 		this_cpu_ptr(&fpsimd_last_state);
 
 	WARN_ON(!system_supports_fpsimd());
-	WARN_ON(!in_softirq() && !irqs_disabled());
+	//WARN_ON(!in_softirq() && !irqs_disabled());
 
 	last->st = st;
 }

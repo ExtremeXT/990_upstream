@@ -6270,6 +6270,73 @@ ufshcd_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 
 	switch (ocs) {
 	case OCS_SUCCESS:
+	case OCS_FATAL_ERROR:
+		result = ufshcd_get_req_rsp(lrbp->ucd_rsp_ptr);
+		hba->ufs_stats.last_hibern8_exit_tstamp = ktime_set(0, 0);
+		switch (result) {
+		case UPIU_TRANSACTION_RESPONSE:
+			/*
+			 * get the response UPIU result to extract
+			 * the SCSI command status
+			 */
+			result = ufshcd_get_rsp_upiu_result(lrbp->ucd_rsp_ptr);
+
+			/*
+			 * get the result based on SCSI status response
+			 * to notify the SCSI midlayer of the command status
+			 */
+			scsi_status = result & MASK_SCSI_STATUS;
+			result = ufshcd_scsi_cmd_status(lrbp, scsi_status);
+
+			if (hba->dev_quirks & UFS_DEVICE_QUIRK_SUPPORT_QUERY_FATAL_MODE) {
+				if (scsi_status == SAM_STAT_CHECK_CONDITION) {
+					int sense_key = (0x0F & lrbp->sense_buffer[2]);
+
+					dev_err(hba->dev, "%s: CHECK CONDITION sense key = %d",
+							__func__, sense_key);
+					if ((sense_key == MEDIUM_ERROR) && !hba->UFS_fatal_mode_done)
+						schedule_work(&hba->fatal_mode_work);
+				}
+			}
+
+			/*
+			 * Currently we are only supporting BKOPs exception
+			 * events hence we can ignore BKOPs exception event
+			 * during power management callbacks. BKOPs exception
+			 * event is not expected to be raised in runtime suspend
+			 * callback as it allows the urgent bkops.
+			 * During system suspend, we are anyway forcefully
+			 * disabling the bkops and if urgent bkops is needed
+			 * it will be enabled on system resume. Long term
+			 * solution could be to abort the system suspend if
+			 * UFS device needs urgent BKOPs.
+			 */
+			if (!hba->pm_op_in_progress &&
+				ufshcd_is_exception_event(lrbp->ucd_rsp_ptr) &&
+				scsi_host_in_recovery(hba->host)) {
+				schedule_work(&hba->eeh_work);
+				dev_info(hba->dev, "execption event reported\n");
+			}
+
+#if defined(CONFIG_UFSFEATURE)
+			if (scsi_status == SAM_STAT_GOOD)
+				ufsf_hpb_noti_rb(&hba->ufsf, lrbp);
+#endif
+			break;
+		case UPIU_TRANSACTION_REJECT_UPIU:
+			/* TODO: handle Reject UPIU Response */
+			result = DID_ERROR << 16;
+			dev_err(hba->dev,
+				"Reject UPIU not fully implemented\n");
+			break;
+		default:
+			result = DID_ERROR << 16;
+			dev_err(hba->dev,
+				"Unexpected request response code = 0x%x\n",
+				result);
+			break;
+		}
+		break;
 	case OCS_ABORTED:
 		result |= DID_ABORT << 16;
 		break;
@@ -6281,9 +6348,6 @@ ufshcd_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 	case OCS_MISMATCH_DATA_BUF_SIZE:
 	case OCS_MISMATCH_RESP_UPIU_SIZE:
 	case OCS_PEER_COMM_FAILURE:
-	case OCS_FATAL_ERROR:
-	case OCS_INVALID_CRYPTO_CONFIG:
-	case OCS_GENERAL_CRYPTO_ERROR:
 	default:
 		result |= DID_ERROR << 16;
 		dev_err(hba->dev,
@@ -6295,7 +6359,7 @@ ufshcd_transfer_rsp_status(struct ufs_hba *hba, struct ufshcd_lrb *lrbp)
 	} /* end of switch */
 
 	if (hba->quirks & UFSHCD_QUIRK_DUMP_DEBUG_INFO)
-	if ((host_byte(result) != DID_OK) && !hba->silence_err_logs)
+	if (host_byte(result) != DID_OK)
 		ufshcd_print_trs(hba, 1 << lrbp->task_tag, true);
 	return result;
 }
@@ -8038,8 +8102,9 @@ static int ufshcd_scsi_add_wlus(struct ufs_hba *hba)
 
 	sdev_boot = __scsi_add_device(hba->host, 0, 0,
 		ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_BOOT_WLUN), NULL);
-	if (IS_ERR(sdev_boot))
+	if (IS_ERR(sdev_boot)) {
 		dev_err(hba->dev, "%s: BOOT WLUN not found\n", __func__);
+	}
 	else
 		scsi_device_put(sdev_boot);
 	goto out;
@@ -8484,9 +8549,7 @@ retry:
 		/* Add required well known logical units to scsi mid layer */
 		ret = ufshcd_scsi_add_wlus(hba);
 		if (ret) {
-			dev_warn(hba->dev, "%s failed to add w-lus %d\n",
-				__func__, ret);
-			ret = 0;
+			goto out;
 		}
 
 		scsi_scan_host(hba->host);
